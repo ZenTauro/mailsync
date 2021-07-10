@@ -1,0 +1,12 @@
+[package]
+name = "mailsync"
+version = "0.1.0"
+authors = ["zentauro <pedrogomezmartin1999@gmail.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+async-imap = "0.5.0"
+async-std = "1.9.0"
+nom = "6.2.1"
