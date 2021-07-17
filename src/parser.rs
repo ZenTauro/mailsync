@@ -14,12 +14,11 @@
 // License along with MailSync.
 // If not, see <https://www.gnu.org/licenses/>.
 
-use nom::bytes::complete::{tag, take_while, escaped};
-use nom::character::complete::{alpha1, multispace0};
-use nom::character::streaming::one_of;
+use nom::bytes::complete::{tag, take_while, take_while1, escaped};
+use nom::character::complete::{alpha1, multispace0, one_of};
 use nom::branch::alt;
 use nom::sequence::{delimited, preceded};
-use nom::IResult;
+use nom::{IResult, delimited};
 
 use std::vec::Vec;
 
@@ -106,6 +105,19 @@ where
     F: Fn(&'a str) -> IResult<&'a str, O>,
 {
     delimited(key(key_name), inner, alt((comment, tag("\n"))))
+}
+
+/// Parses a string
+pub fn string_parser(i: StrLike) -> IResult<StrLike, StrLike> {
+    delimited(
+        tag("\""),
+        escaped(
+            take_while1(|c: char| c != '\n' && c != '\\' && c != '"'),
+            '\\',
+            one_of(r#"\"n"#)
+        ),
+        tag("\"")
+    )(i)
 }
 
 /// Parses line into account name
@@ -219,6 +231,21 @@ mod test {
             Ok((rest, parsed)) => {
                 assert_eq!(parsed, "value ");
                 assert_eq!(rest, "");
+            }
+            Err(e) => {
+                panic!("{}", e);
+            }
+        }
+    }
+
+    #[test]
+    fn parses_escaped_string() {
+        let input = r#""this escaped string contains a \" symbol" this should be out of the parsed part"#;
+
+        match string_parser(input) {
+            Ok((rest, parsed)) => {
+                assert_eq!(parsed, r#"this escaped string contains a \" symbol"#);
+                assert_eq!(rest, " this should be out of the parsed part");
             }
             Err(e) => {
                 panic!("{}", e);
