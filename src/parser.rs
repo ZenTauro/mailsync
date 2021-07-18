@@ -19,16 +19,24 @@ use nom::character::complete::{alpha1, multispace0, one_of};
 use nom::branch::alt;
 use nom::sequence::{delimited, preceded};
 use nom::{IResult, delimited};
+use nom::combinator::map;
 
 use std::vec::Vec;
 
 pub type Accounts = Vec<Account>;
 pub type StrLike<'a> = &'a str;
 
+#[derive(Debug, PartialEq, Eq)]
 pub enum CreateType {
     Both,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum SSLType {
+    IMAPS
+}
+
+#[derive(Debug, PartialEq, Eq)]
 pub struct Account {
     name: String,
     host: String,
@@ -41,11 +49,13 @@ pub struct Account {
     channel: Channel,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub struct IMAPStore {
     name: String,
     account: String,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub struct MaildirStore {
     name: String,
     subfolders: String,
@@ -53,6 +63,7 @@ pub struct MaildirStore {
     inbox: String,
 }
 
+#[derive(Debug, PartialEq, Eq)]
 pub struct Channel {
     name: String,
     far: String,
@@ -61,6 +72,47 @@ pub struct Channel {
     create: CreateType,
     sync_state: String,
 }
+
+// AST types
+#[derive(Debug, PartialEq, Eq)]
+pub enum AccountExpr {
+    NameDeclaration(String),
+    Host(String),
+    User(String),
+    PassCmd(String),
+    SSLType(SSLType),
+    CertificateFile(String),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum IMAPStoreExpr {
+    NameDeclaration(String)
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum MaildirStoreExpr {
+    NameDeclaration(String),
+    Subfolders(SubfoldersType),
+    Path(String),
+    Inbox(String),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum SubfoldersType {
+    Verbatim
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ChannelExpr {
+    NameDeclaration(String),
+    Far(String),
+    Near(String),
+    Patterns(Vec<String>),
+    Create(CreateType),
+    SyncState(String),
+}
+
+pub type AST = Vec<AccountExpr>;
 
 /// A combinator that takes a parser `inner` and produces a parser
 /// that also consumes both leading and trailing whitespace, returning
@@ -81,7 +133,7 @@ fn comment(s: &str)  -> IResult<&str, &str> {
 
 /// Parses the end of declaration delimiter
 fn eol(s: &str) -> IResult<&str, &str> {
-    alt((comment, tag("\n")))(s)
+    alt((comment, preceded(multispace0, tag("\n"))))(s)
 }
 
 /// Parses the declaration of a key
@@ -104,10 +156,16 @@ fn key_value<'a, F: 'a, O>(
 where
     F: Fn(&'a str) -> IResult<&'a str, O>,
 {
-    delimited(key(key_name), inner, alt((comment, tag("\n"))))
+    delimited(key(key_name), inner, alt((comment, preceded(multispace0, tag("\n")))))
 }
 
-/// Parses a string
+/// Parses an escaped string, captures the inside of the quote
+/// delimited string:
+///
+/// ```
+/// let Ok((_, res)) = string_parser("\"the string\"");
+/// assert_eq!(res, "the string");
+/// ```
 pub fn string_parser(i: StrLike) -> IResult<StrLike, StrLike> {
     delimited(
         tag("\""),
@@ -121,12 +179,35 @@ pub fn string_parser(i: StrLike) -> IResult<StrLike, StrLike> {
 }
 
 /// Parses line into account name
-fn account_name(i: StrLike) -> IResult<StrLike, StrLike> {
-    key_value("IMAPAccount", alpha1)(i)
+fn account_name(i: StrLike) -> IResult<StrLike, AccountExpr> {
+    map(
+        key_value("IMAPAccount", alpha1),
+        |x| AccountExpr::NameDeclaration(x.to_owned())
+    )(i)
 }
 
-fn host_name(i: StrLike) -> IResult<StrLike, StrLike> {
-    key_value("Host", take_while(|c: char| !c.is_whitespace()))(i)
+/// Parses host name line
+fn host_name(i: StrLike) -> IResult<StrLike, AccountExpr> {
+    map(
+        key_value("Host", take_while(|c: char| !c.is_whitespace())),
+        |x| AccountExpr::Host(x.to_owned())
+    )(i)
+}
+
+/// Parses user name line
+fn user_name(i: StrLike) -> IResult<StrLike, AccountExpr> {
+    map(
+        key_value("User", take_while(|c: char| !c.is_whitespace())),
+        |x| AccountExpr::User(x.to_owned())
+    )(i)
+}
+
+/// Parses the PassCmd line
+fn pass_cmd(i: StrLike) -> IResult<StrLike, AccountExpr> {
+    map(
+        key_value("PassCmd", string_parser),
+        |x| AccountExpr::PassCmd(x.to_owned())
+    )(i)
 }
 
 #[cfg(test)]
@@ -259,7 +340,7 @@ mod test {
 
         match account_name(input) {
             Ok((rest, parsed)) => {
-                assert_eq!(parsed, "gmail");
+                assert_eq!(parsed, AccountExpr::NameDeclaration("gmail".to_string()));
                 assert_eq!(rest, "");
             }
             Err(e) => {
@@ -274,7 +355,37 @@ mod test {
 
         match host_name(input) {
             Ok((rest, parsed)) => {
-                assert_eq!(parsed, "some.sample@mail.gmail.com");
+                assert_eq!(parsed, AccountExpr::Host("some.sample@mail.gmail.com".to_string()));
+                assert_eq!(rest, "");
+            }
+            Err(e) => {
+                panic!("{}", e);
+            }
+        }
+    }
+
+    #[test]
+    fn parses_user_name() {
+        let input = "User some.sample@mail.gmail.com # Another comment\n";
+
+        match user_name(input) {
+            Ok((rest, parsed)) => {
+                assert_eq!(parsed, AccountExpr::User("some.sample@mail.gmail.com".to_string()));
+                assert_eq!(rest, "");
+            }
+            Err(e) => {
+                panic!("{}", e);
+            }
+        }
+    }
+
+    #[test]
+    fn parses_pass_cmd() {
+        let input = "PassCmd \"get_password -a \\\"some.sample@mail.com\\\"\"  # Another comment\n";
+
+        match pass_cmd(input) {
+            Ok((rest, parsed)) => {
+                assert_eq!(parsed, AccountExpr::PassCmd("get_password -a \\\"some.sample@mail.com\\\"".to_string()));
                 assert_eq!(rest, "");
             }
             Err(e) => {
