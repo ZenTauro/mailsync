@@ -17,7 +17,7 @@
 use nom::bytes::complete::{tag, take_while, take_while1, escaped};
 use nom::character::complete::{alpha1, multispace0, one_of};
 use nom::branch::alt;
-use nom::sequence::{delimited, preceded};
+use nom::sequence::{delimited, preceded, tuple, terminated};
 use nom::{IResult, delimited};
 use nom::combinator::map;
 
@@ -73,7 +73,15 @@ pub struct Channel {
     sync_state: String,
 }
 
-// AST types
+///
+pub enum ConfigExpr {
+    Account(AccountExpr),
+    IMAPStore(IMAPStoreExpr),
+    MaildirStore(MaildirStoreExpr),
+    Channel(ChannelExpr)
+}
+
+/// AST types
 #[derive(Debug, PartialEq, Eq)]
 pub enum AccountExpr {
     NameDeclaration(String),
@@ -82,10 +90,6 @@ pub enum AccountExpr {
     PassCmd(String),
     SSLType(SSLType),
     CertificateFile(String),
-
-    IMAPStore(IMAPStoreExpr),
-    MaildirStore(MaildirStoreExpr),
-    Channel(ChannelExpr)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -255,6 +259,25 @@ fn account(i: StrLike) -> IResult<StrLike, IMAPStoreExpr> {
     )(i)
 }
 
+fn imap_store_block(i: StrLike) -> IResult<StrLike, IMAPStore> {
+    map(
+        terminated(tuple((imap_store_name, account)), tag("\n")),
+        |x| {
+            match x {
+                (IMAPStoreExpr::NameDeclaration(store_name), IMAPStoreExpr::Account(acc)) =>
+                    IMAPStore {name: store_name, account: acc},
+                _ => panic!(
+                    concat!(
+                        "This should never happen since",
+                        "imap_store_name and account always return",
+                        "the specified enum variants"
+                    )
+                )
+            }
+        }
+    )(i)
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -267,15 +290,10 @@ mod test {
         where P: Fn(&'a str) -> IResult<&'a str, R>,
               R: std::fmt::Debug + Eq
     {
-        match parser(input) {
-            Ok((rest, parsed)) => {
-                assert_eq!(parsed, expected);
-                assert_eq!(rest, "");
-            }
-            Err(e) => {
-                panic!("{}", e);
-            }
-        }
+        let (rest, parsed) = parser(input).unwrap();
+
+        assert_eq!(parsed, expected);
+        assert_eq!(rest, "");
     }
 
     #[test]
@@ -465,6 +483,23 @@ mod test {
 
         let input = "Account mail  # Another comment\n";
         let expected = IMAPStoreExpr::Account("mail".to_owned());
+
+        simple_parser_tester(input, parser, expected)
+    }
+
+    #[test]
+    fn parses_imap_store_block() {
+        let parser = imap_store_block;
+
+        let input = concat!(
+            "IMAPStore mail-remote  # Another comment\n",
+            "Account mail  # Another comment\n",
+            "\n"
+        );
+        let expected = IMAPStore {
+            name: "mail-remote".to_owned(),
+            account: "mail".to_owned()
+        };
 
         simple_parser_tester(input, parser, expected)
     }
