@@ -82,11 +82,16 @@ pub enum AccountExpr {
     PassCmd(String),
     SSLType(SSLType),
     CertificateFile(String),
+
+    IMAPStore(IMAPStoreExpr),
+    MaildirStore(MaildirStoreExpr),
+    Channel(ChannelExpr)
 }
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum IMAPStoreExpr {
-    NameDeclaration(String)
+    NameDeclaration(String),
+    Account(String)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -207,6 +212,46 @@ fn pass_cmd(i: StrLike) -> IResult<StrLike, AccountExpr> {
     map(
         key_value("PassCmd", string_parser),
         |x| AccountExpr::PassCmd(x.to_owned())
+    )(i)
+}
+
+/// Parses the SSLType line
+fn ssl_type(i: StrLike) -> IResult<StrLike, AccountExpr> {
+    map(
+        key_value("SSLType", normal_argument),
+        |x| {
+            let t = match x.trim() {
+                "IMAPS" => SSLType::IMAPS,
+                     s  => unimplemented!("Find how to throw and error but keep parsing: {}", s)
+            };
+            AccountExpr::SSLType(t)
+        }
+    )(i)
+}
+
+/// Parses the CertificateFile line
+// TODO: Use a better parser for the argument of Certificate file
+//       instead of normal_argument
+fn certificate_file(i: StrLike) -> IResult<StrLike, AccountExpr> {
+    map(
+        key_value("CertificateFile", normal_argument),
+        |x| AccountExpr::CertificateFile(x.trim().to_owned())
+    )(i)
+}
+
+/// Parses the IMAPStore line
+fn imap_store_name(i: StrLike) -> IResult<StrLike, IMAPStoreExpr> {
+    map(
+        key_value("IMAPStore", normal_argument),
+        |x| IMAPStoreExpr::NameDeclaration(x.trim().to_owned())
+    )(i)
+}
+
+/// Parses the Account line
+fn account(i: StrLike) -> IResult<StrLike, IMAPStoreExpr> {
+    map(
+        key_value("Account", normal_argument),
+        |x| IMAPStoreExpr::Account(x.trim().to_owned())
     )(i)
 }
 
@@ -334,63 +379,99 @@ mod test {
         }
     }
 
-    #[test]
-    fn parses_account_name() {
-        let input = "IMAPAccount gmail # Another comment\n";
-
-        match account_name(input) {
+    fn simple_parser_tester<'a, P, R>(input: &'a str, parser: P, expected: R)
+        where P: Fn(&'a str) -> IResult<&'a str, R>,
+              R: std::fmt::Debug + Eq
+    {
+        match parser(input) {
             Ok((rest, parsed)) => {
-                assert_eq!(parsed, AccountExpr::NameDeclaration("gmail".to_string()));
+                assert_eq!(parsed, expected);
                 assert_eq!(rest, "");
             }
             Err(e) => {
                 panic!("{}", e);
             }
         }
+    }
+
+    #[test]
+    fn parses_imap_account_name() {
+        let parser = account_name;
+
+        let input = "IMAPAccount mail # Another comment\n";
+        let expected = AccountExpr::NameDeclaration("mail".to_string());
+
+        simple_parser_tester(input, parser, expected)
     }
 
     #[test]
     fn parses_host_name() {
-        let input = "Host some.sample@mail.gmail.com # Another comment\n";
+        let parser = host_name;
 
-        match host_name(input) {
-            Ok((rest, parsed)) => {
-                assert_eq!(parsed, AccountExpr::Host("some.sample@mail.gmail.com".to_string()));
-                assert_eq!(rest, "");
-            }
-            Err(e) => {
-                panic!("{}", e);
-            }
-        }
+        let input = "Host some.sample@mail.gmail.com # Another comment\n";
+        let expected = AccountExpr::Host("some.sample@mail.gmail.com".to_string());
+
+        simple_parser_tester(input, parser, expected)
     }
 
     #[test]
     fn parses_user_name() {
-        let input = "User some.sample@mail.gmail.com # Another comment\n";
+        let parser = user_name;
 
-        match user_name(input) {
-            Ok((rest, parsed)) => {
-                assert_eq!(parsed, AccountExpr::User("some.sample@mail.gmail.com".to_string()));
-                assert_eq!(rest, "");
-            }
-            Err(e) => {
-                panic!("{}", e);
-            }
-        }
+        let input = "User some.sample@mail.gmail.com # Another comment\n";
+        let expected = AccountExpr::User("some.sample@mail.gmail.com".to_string());
+
+        simple_parser_tester(input, parser, expected)
     }
 
     #[test]
     fn parses_pass_cmd() {
-        let input = "PassCmd \"get_password -a \\\"some.sample@mail.com\\\"\"  # Another comment\n";
+        let parser = pass_cmd;
 
-        match pass_cmd(input) {
-            Ok((rest, parsed)) => {
-                assert_eq!(parsed, AccountExpr::PassCmd("get_password -a \\\"some.sample@mail.com\\\"".to_string()));
-                assert_eq!(rest, "");
-            }
-            Err(e) => {
-                panic!("{}", e);
-            }
-        }
+        let input = "PassCmd \"get_password -a \\\"some.sample@mail.com\\\"\"  # Another comment\n";
+        let expected = AccountExpr::PassCmd("get_password -a \\\"some.sample@mail.com\\\"".to_string());
+
+        simple_parser_tester(input, parser, expected)
+    }
+
+
+    #[test]
+    fn parses_ssl_type() {
+        let parser = ssl_type;
+
+        let input = "SSLType IMAPS  # Another comment\n";
+        let expected = AccountExpr::SSLType(SSLType::IMAPS);
+
+        simple_parser_tester(input, parser, expected);
+    }
+
+    #[test]
+    fn parses_certificate_file() {
+        let parser = certificate_file;
+
+        let input = "CertificateFile /some/random/file  # Another comment\n";
+        let expected = AccountExpr::CertificateFile("/some/random/file".to_owned());
+
+        simple_parser_tester(input, parser, expected)
+    }
+
+    #[test]
+    fn parses_imap_store_name() {
+        let parser = imap_store_name;
+
+        let input = "IMAPStore mail-remote  # Another comment\n";
+        let expected = IMAPStoreExpr::NameDeclaration("mail-remote".to_owned());
+
+        simple_parser_tester(input, parser, expected)
+    }
+
+    #[test]
+    fn parses_account_name() {
+        let parser = account;
+
+        let input = "Account mail  # Another comment\n";
+        let expected = IMAPStoreExpr::Account("mail".to_owned());
+
+        simple_parser_tester(input, parser, expected)
     }
 }
