@@ -259,13 +259,17 @@ fn account(i: StrLike) -> IResult<StrLike, IMAPStoreExpr> {
 mod test {
     use super::*;
 
-    #[test]
-    fn parses_comment_1() {
-        let input = "# this is a comment\n";
-
-        match comment(input) {
+    fn simple_parser_tester<'a, P, R>(
+        input: &'a str,
+        parser: P,
+        expected: R,
+    )
+        where P: Fn(&'a str) -> IResult<&'a str, R>,
+              R: std::fmt::Debug + Eq
+    {
+        match parser(input) {
             Ok((rest, parsed)) => {
-                assert_eq!(parsed, " this is a comment");
+                assert_eq!(parsed, expected);
                 assert_eq!(rest, "");
             }
             Err(e) => {
@@ -275,18 +279,23 @@ mod test {
     }
 
     #[test]
-    fn parses_comment_2() {
-        let input = "    # this is also a comment\n";
+    fn parses_comment_1() {
+        let parser = comment;
 
-        match comment(input) {
-            Ok((rest, parsed)) => {
-                assert_eq!(parsed, " this is also a comment");
-                assert_eq!(rest, "");
-            }
-            Err(e) => {
-                panic!("{}", e);
-            }
-        }
+        let input = "# this is a comment\n";
+        let expected = " this is a comment";
+
+        simple_parser_tester(input, parser, expected)
+    }
+
+    #[test]
+    fn parses_comment_2() {
+        let parser = comment;
+
+        let input = "    # this is also a comment\n";
+        let expected = " this is also a comment";
+
+        simple_parser_tester(input, parser, expected)
     }
 
     #[test]
@@ -372,21 +381,6 @@ mod test {
             Ok((rest, parsed)) => {
                 assert_eq!(parsed, r#"this escaped string contains a \" symbol"#);
                 assert_eq!(rest, " this should be out of the parsed part");
-            }
-            Err(e) => {
-                panic!("{}", e);
-            }
-        }
-    }
-
-    fn simple_parser_tester<'a, P, R>(input: &'a str, parser: P, expected: R)
-        where P: Fn(&'a str) -> IResult<&'a str, R>,
-              R: std::fmt::Debug + Eq
-    {
-        match parser(input) {
-            Ok((rest, parsed)) => {
-                assert_eq!(parsed, expected);
-                assert_eq!(rest, "");
             }
             Err(e) => {
                 panic!("{}", e);
