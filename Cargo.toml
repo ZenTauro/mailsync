@@ -17,4 +17,4 @@ categories = ["command-line-utilities", "email", "asynchronous"]
 [dependencies]
 async-imap = "0.5.0"
 async-std = "1.9.0"
-nom = "6.2.1"
+nom = "7.0.0"

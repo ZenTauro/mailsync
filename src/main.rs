@@ -14,6 +14,8 @@
 // License along with MailSync.
 // If not, see <https://www.gnu.org/licenses/>.
 
+#![allow(unused)]
+
 pub(crate) mod parser;
 
 use nom::{IResult, bytes::complete::take};

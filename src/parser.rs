@@ -18,8 +18,9 @@ use nom::bytes::complete::{tag, take_while, take_while1, escaped};
 use nom::character::complete::{alpha1, multispace0, one_of};
 use nom::branch::alt;
 use nom::sequence::{delimited, preceded, tuple, terminated};
-use nom::{IResult, delimited};
+use nom::IResult;
 use nom::combinator::map;
+use nom::multi::many0;
 
 use std::vec::Vec;
 
@@ -42,11 +43,11 @@ pub struct Account {
     host: String,
     user: String,
     pass_cmd: String,
-    ssl_type: String,
+    ssl_type: SSLType,
     cert_file: String,
-    imap_store: IMAPStore,
-    maildir_store: MaildirStore,
-    channel: Channel,
+    // imap_store: IMAPStore,
+    // maildir_store: MaildirStore,
+    // channel: Channel,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -259,6 +260,7 @@ fn account(i: StrLike) -> IResult<StrLike, IMAPStoreExpr> {
     )(i)
 }
 
+/// Parses an IMAPStore block
 fn imap_store_block(i: StrLike) -> IResult<StrLike, IMAPStore> {
     map(
         terminated(tuple((imap_store_name, account)), tag("\n")),
@@ -276,6 +278,52 @@ fn imap_store_block(i: StrLike) -> IResult<StrLike, IMAPStore> {
             }
         }
     )(i)
+}
+
+/// Parses an IMAPAccount block
+pub fn imap_account_block(i: StrLike) -> IResult<StrLike, Account> {
+    let imap_account_lines = many0(
+        alt((
+            host_name,
+            user_name,
+            pass_cmd,
+            ssl_type,
+            certificate_file
+        )));
+    let block_parser = tuple((account_name, imap_account_lines));
+
+    map(block_parser, |x| {
+        match x {
+            (AccountExpr::NameDeclaration(acc_name), params) => {
+                let mut host_v = String::new();
+                let mut user_v = String::new();
+                let mut pass_cmd_v = String::new();
+                let mut ssl_type_v = SSLType::IMAPS;
+                let mut cert_file_v = String::new();
+
+                for param in params {
+                    match param {
+                        AccountExpr::Host(v) => {host_v = v;},
+                        AccountExpr::User(v) => {user_v = v;},
+                        AccountExpr::PassCmd(v) => {pass_cmd_v = v;},
+                        AccountExpr::SSLType(v) => {ssl_type_v = v;},
+                        AccountExpr::CertificateFile(v) => {cert_file_v = v;},
+                        AccountExpr::NameDeclaration(_) => {panic!("This should not happen")},
+                    }
+                }
+
+                Account {
+                    name: acc_name.to_string(),
+                    host: host_v,
+                    user: user_v,
+                    pass_cmd: pass_cmd_v,
+                    ssl_type: ssl_type_v,
+                    cert_file: cert_file_v,
+                }
+            }
+            _ => panic!("This should never happen since it can only succeed if the form is the name declaration first and the others later")
+        }
+    })(i)
 }
 
 #[cfg(test)]
@@ -312,6 +360,16 @@ mod test {
 
         let input = "    # this is also a comment\n";
         let expected = " this is also a comment";
+
+        simple_parser_tester(input, parser, expected)
+    }
+
+    #[test]
+    fn parses_comment_3() {
+        let parser = comment;
+
+        let input = "    #\n";
+        let expected = "";
 
         simple_parser_tester(input, parser, expected)
     }
@@ -502,5 +560,65 @@ mod test {
         };
 
         simple_parser_tester(input, parser, expected)
+    }
+
+    #[test]
+    fn block_test() {
+        let mut imap_account_lines = many0(
+            alt((
+                host_name,
+                user_name,
+                pass_cmd,
+                ssl_type,
+                certificate_file
+            )));
+
+        let input = concat!(
+            "Host imap.mail.com   # A comment\n",
+            "User example@mail.com   # A comment\n",
+            "PassCmd \"get_pass 'example@mail.com'\"   # A comment\n",
+            "SSLType IMAPS #\n",
+            "CertificateFile /etc/ssl/certs/ca-certificates.crt # comt\n",
+        );
+
+        let res = imap_account_lines(input);
+        match res {
+            Ok((a, _)) => assert_eq!(a, ""),
+            Err(e) => panic!("{}", e)
+        }
+    }
+
+    #[test]
+    fn parses_imap_account_block() {
+        let parser = imap_account_block;
+
+        let input = concat!(
+            "IMAPAccount mail\n",
+            "Host imap.mail.com   # A comment\n",
+            "User example@mail.com   # A comment\n",
+            "PassCmd \"get_pass 'example@mail.com'\"   # A comment\n",
+            "SSLType IMAPS #\n",
+            "CertificateFile /etc/ssl/certs/ca-certificates.crt # comt\n",
+            "\n"
+        );
+        let expected = Account {
+            name: "mail".to_owned(),
+            host: "imap.mail.com".to_owned(),
+            user: "example@mail.com".to_owned(),
+            pass_cmd: "get_pass 'example@mail.com'".to_owned(),
+            ssl_type: SSLType::IMAPS,
+            cert_file: "/etc/ssl/certs/ca-certificates.crt".to_owned()
+        };
+
+        {
+            let expected = expected;
+            match parser(input) {
+                Ok((rest, parsed)) => {
+                    assert_eq!(parsed, expected);
+                    assert_eq!(rest, "");
+                }
+                Err(e) => panic!("{}", e),
+            }
+        }
     }
 }
