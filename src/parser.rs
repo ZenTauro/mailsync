@@ -21,7 +21,9 @@ use nom::sequence::{delimited, preceded, tuple, terminated};
 use nom::IResult;
 use nom::combinator::map;
 use nom::multi::many0;
+use nom::error::{ParseError, VerboseError, convert_error};
 
+use std::str::ParseBoolError;
 use std::vec::Vec;
 
 pub type Accounts = Vec<Account>;
@@ -127,44 +129,44 @@ pub type AST = Vec<AccountExpr>;
 /// A combinator that takes a parser `inner` and produces a parser
 /// that also consumes both leading and trailing whitespace, returning
 /// the output of `inner`.
-fn ws<'a, F: 'a, O>(
+fn ws<'a, F: 'a, O, E: ParseError<&'a str>>(
     inner: F,
-) -> impl FnMut(&'a str) -> IResult<&'a str, O>
+) -> impl FnMut(&'a str) -> IResult<&'a str, O, E>
 where
-    F: Fn(&'a str) -> IResult<&'a str, O>,
+    F: Fn(&'a str) -> IResult<&'a str, O, E>,
 {
     delimited(multispace0, inner, multispace0)
 }
 
 /// Parses a comment
-fn comment(s: &str)  -> IResult<&str, &str> {
+fn comment<'a, E: ParseError<&'a str>>(s: &'a str)  -> IResult<&str, &str, E> {
     delimited(preceded(multispace0, tag("#")), take_while(|c: char| c != '\n'), tag("\n"))(s)
 }
 
 /// Parses the end of declaration delimiter
-fn eol(s: &str) -> IResult<&str, &str> {
+fn eol<'a, E: ParseError<&'a str>>(s: &'a str) -> IResult<&str, &str, E> {
     alt((comment, preceded(multispace0, tag("\n"))))(s)
 }
 
 /// Parses the declaration of a key
-fn key<'a>(
+fn key<'a, E: ParseError<&'a str> + 'a>(
     inner: &'static str,
-) -> impl FnMut(&'a str) -> IResult<&'a str, &'a str>
+) -> impl FnMut(&'a str) -> IResult<&'a str, &'a str, E>
 {
     ws(tag(inner))
 }
 
-fn normal_argument(s: &str) -> IResult<&str, &str> {
+fn normal_argument<'a, E: ParseError<&'a str>>(s: &'a str) -> IResult<&str, &str, E> {
     take_while(|c: char| c != '\n' && c != '#')(s)
 }
 
 /// Parses a key value line
-fn key_value<'a, F: 'a, O>(
+fn key_value<'a, F: 'a, O, E: ParseError<&'a str> + 'a>(
     key_name: &'static str,
     inner: F,
-) -> impl FnMut(&'a str) -> IResult<&'a str, O>
+) -> impl FnMut(&'a str) -> IResult<&'a str, O, E>
 where
-    F: Fn(&'a str) -> IResult<&'a str, O>,
+    F: Fn(&'a str) -> IResult<&'a str, O, E>,
 {
     delimited(key(key_name), inner, alt((comment, preceded(multispace0, tag("\n")))))
 }
@@ -176,7 +178,7 @@ where
 /// let Ok((_, res)) = string_parser("\"the string\"");
 /// assert_eq!(res, "the string");
 /// ```
-pub fn string_parser(i: StrLike) -> IResult<StrLike, StrLike> {
+pub fn string_parser<'a, E: ParseError<&'a str>>(i: StrLike<'a>) -> IResult<StrLike<'a>, StrLike, E> {
     delimited(
         tag("\""),
         escaped(
@@ -189,7 +191,7 @@ pub fn string_parser(i: StrLike) -> IResult<StrLike, StrLike> {
 }
 
 /// Parses line into account name
-fn account_name(i: StrLike) -> IResult<StrLike, AccountExpr> {
+fn account_name<'a, E: ParseError<&'a str> + 'a>(i: &'a str) -> IResult<StrLike, AccountExpr, E> {
     map(
         key_value("IMAPAccount", alpha1),
         |x| AccountExpr::NameDeclaration(x.to_owned())
@@ -197,7 +199,7 @@ fn account_name(i: StrLike) -> IResult<StrLike, AccountExpr> {
 }
 
 /// Parses host name line
-fn host_name(i: StrLike) -> IResult<StrLike, AccountExpr> {
+fn host_name<'a, E: ParseError<&'a str> + 'a>(i: &'a str) -> IResult<StrLike, AccountExpr, E> {
     map(
         key_value("Host", take_while(|c: char| !c.is_whitespace())),
         |x| AccountExpr::Host(x.to_owned())
@@ -205,7 +207,7 @@ fn host_name(i: StrLike) -> IResult<StrLike, AccountExpr> {
 }
 
 /// Parses user name line
-fn user_name(i: StrLike) -> IResult<StrLike, AccountExpr> {
+fn user_name<'a, E: ParseError<&'a str> + 'a>(i: &'a str) -> IResult<StrLike, AccountExpr, E> {
     map(
         key_value("User", take_while(|c: char| !c.is_whitespace())),
         |x| AccountExpr::User(x.to_owned())
@@ -213,7 +215,7 @@ fn user_name(i: StrLike) -> IResult<StrLike, AccountExpr> {
 }
 
 /// Parses the PassCmd line
-fn pass_cmd(i: StrLike) -> IResult<StrLike, AccountExpr> {
+fn pass_cmd<'a, E: ParseError<&'a str> + 'a>(i: &'a str) -> IResult<StrLike, AccountExpr, E> {
     map(
         key_value("PassCmd", string_parser),
         |x| AccountExpr::PassCmd(x.to_owned())
@@ -221,7 +223,7 @@ fn pass_cmd(i: StrLike) -> IResult<StrLike, AccountExpr> {
 }
 
 /// Parses the SSLType line
-fn ssl_type(i: StrLike) -> IResult<StrLike, AccountExpr> {
+fn ssl_type<'a, E: ParseError<&'a str> + 'a>(i: &'a str) -> IResult<StrLike, AccountExpr, E> {
     map(
         key_value("SSLType", normal_argument),
         |x| {
@@ -237,7 +239,7 @@ fn ssl_type(i: StrLike) -> IResult<StrLike, AccountExpr> {
 /// Parses the CertificateFile line
 // TODO: Use a better parser for the argument of Certificate file
 //       instead of normal_argument
-fn certificate_file(i: StrLike) -> IResult<StrLike, AccountExpr> {
+fn certificate_file<'a, E: ParseError<&'a str> + 'a>(i: &'a str) -> IResult<StrLike, AccountExpr, E> {
     map(
         key_value("CertificateFile", normal_argument),
         |x| AccountExpr::CertificateFile(x.trim().to_owned())
@@ -245,7 +247,7 @@ fn certificate_file(i: StrLike) -> IResult<StrLike, AccountExpr> {
 }
 
 /// Parses the IMAPStore line
-fn imap_store_name(i: StrLike) -> IResult<StrLike, IMAPStoreExpr> {
+fn imap_store_name<'a, E: ParseError<&'a str> + 'a>(i: StrLike<'a>) -> IResult<StrLike<'a>, IMAPStoreExpr, E> {
     map(
         key_value("IMAPStore", normal_argument),
         |x| IMAPStoreExpr::NameDeclaration(x.trim().to_owned())
@@ -253,7 +255,7 @@ fn imap_store_name(i: StrLike) -> IResult<StrLike, IMAPStoreExpr> {
 }
 
 /// Parses the Account line
-fn account(i: StrLike) -> IResult<StrLike, IMAPStoreExpr> {
+fn account<'a, E: ParseError<&'a str> + 'a>(i: &'a str) -> IResult<StrLike, IMAPStoreExpr, E> {
     map(
         key_value("Account", normal_argument),
         |x| IMAPStoreExpr::Account(x.trim().to_owned())
@@ -261,7 +263,7 @@ fn account(i: StrLike) -> IResult<StrLike, IMAPStoreExpr> {
 }
 
 /// Parses an IMAPStore block
-fn imap_store_block(i: StrLike) -> IResult<StrLike, IMAPStore> {
+fn imap_store_block<'a, E: ParseError<&'a str> + 'a>(i: &'a str) -> IResult<&'a str, IMAPStore, E> {
     map(
         terminated(tuple((imap_store_name, account)), tag("\n")),
         |x| {
@@ -281,7 +283,7 @@ fn imap_store_block(i: StrLike) -> IResult<StrLike, IMAPStore> {
 }
 
 /// Parses an IMAPAccount block
-pub fn imap_account_block(i: StrLike) -> IResult<StrLike, Account> {
+pub fn imap_account_block<'a, E: ParseError<&'a str> + 'a>(i: StrLike<'a>) -> IResult<StrLike<'a>, Account, E> {
     let imap_account_lines = many0(
         alt((
             host_name,
@@ -328,6 +330,8 @@ pub fn imap_account_block(i: StrLike) -> IResult<StrLike, Account> {
 
 #[cfg(test)]
 mod test {
+    use nom::Finish;
+
     use super::*;
 
     fn simple_parser_tester<'a, P, R>(
@@ -378,7 +382,7 @@ mod test {
     fn parses_key() {
         let input = "Key value";
 
-        match key("Key")(input) {
+        match key::<VerboseError<&str>>("Key")(input) {
             Ok((rest, parsed)) => {
                 assert_eq!(parsed, "Key");
                 assert_eq!(rest, "value");
@@ -393,7 +397,7 @@ mod test {
     fn parses_normal_argument_1() {
         let input = "value\n";
 
-        match normal_argument(input) {
+        match normal_argument::<VerboseError<&str>>(input) {
             Ok((rest, parsed)) => {
                 assert_eq!(parsed, "value");
                 assert_eq!(rest, "\n");
@@ -408,7 +412,7 @@ mod test {
     fn parses_normal_argument_2() {
         let input = "value \n";
 
-        match normal_argument(input) {
+        match normal_argument::<VerboseError<&str>>(input) {
             Ok((rest, parsed)) => {
                 assert_eq!(parsed, "value ");
                 assert_eq!(rest, "\n");
@@ -423,7 +427,7 @@ mod test {
     fn parses_normal_argument_3() {
         let input = "value # this is a comment\n";
 
-        match normal_argument(input) {
+        match normal_argument::<VerboseError<&str>>(input) {
             Ok((rest, parsed)) => {
                 assert_eq!(parsed, "value ");
                 assert_eq!(rest, "# this is a comment\n");
@@ -438,7 +442,7 @@ mod test {
     fn parses_key_value() {
         let input = "Key value # this is a comment\n";
 
-        match key_value("Key", normal_argument)(input) {
+        match key_value::<_, &str, VerboseError<&str>>("Key", normal_argument)(input) {
             Ok((rest, parsed)) => {
                 assert_eq!(parsed, "value ");
                 assert_eq!(rest, "");
@@ -453,7 +457,7 @@ mod test {
     fn parses_escaped_string() {
         let input = r#""this escaped string contains a \" symbol" this should be out of the parsed part"#;
 
-        match string_parser(input) {
+        match string_parser::<VerboseError<&str>>(input) {
             Ok((rest, parsed)) => {
                 assert_eq!(parsed, r#"this escaped string contains a \" symbol"#);
                 assert_eq!(rest, " this should be out of the parsed part");
@@ -566,7 +570,7 @@ mod test {
     fn block_test() {
         let mut imap_account_lines = many0(
             alt((
-                host_name,
+                host_name::<VerboseError<&str>>,
                 user_name,
                 pass_cmd,
                 ssl_type,
@@ -590,8 +594,6 @@ mod test {
 
     #[test]
     fn parses_imap_account_block() {
-        let parser = imap_account_block;
-
         let input = concat!(
             "IMAPAccount mail\n",
             "Host imap.mail.com   # A comment\n",
@@ -612,12 +614,12 @@ mod test {
 
         {
             let expected = expected;
-            match parser(input) {
+            match imap_account_block::<VerboseError<&str>>(input).finish() {
                 Ok((rest, parsed)) => {
                     assert_eq!(parsed, expected);
                     assert_eq!(rest, "");
                 }
-                Err(e) => panic!("{}", e),
+                Err(e) => panic!("panic here: {:#?}", e),
             }
         }
     }
