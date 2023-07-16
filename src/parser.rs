@@ -15,9 +15,9 @@
 // If not, see <https://www.gnu.org/licenses/>.
 
 use nom::bytes::complete::{tag, take_while, take_while1, escaped};
-use nom::character::complete::{alpha1, multispace0, one_of};
+use nom::character::complete::{alpha1, one_of};
 use nom::branch::alt;
-use nom::sequence::{delimited, preceded, tuple, terminated};
+use nom::sequence::{delimited, preceded, tuple, pair, terminated};
 use nom::IResult;
 use nom::combinator::map;
 use nom::multi::many0;
@@ -126,6 +126,11 @@ pub enum ChannelExpr {
 
 pub type AST = Vec<AccountExpr>;
 
+/// Parses the end of declaration delimiter
+fn ws_nonl<'a, E: ParseError<&'a str>>(s: &'a str) -> IResult<&str, Vec<&str>, E> {
+    many0(alt((tag(" "), tag("\t"))))(s)
+}
+
 /// A combinator that takes a parser `inner` and produces a parser
 /// that also consumes both leading and trailing whitespace, returning
 /// the output of `inner`.
@@ -135,17 +140,17 @@ fn ws<'a, F: 'a, O, E: ParseError<&'a str>>(
 where
     F: Fn(&'a str) -> IResult<&'a str, O, E>,
 {
-    delimited(multispace0, inner, multispace0)
+    delimited(ws_nonl, inner, ws_nonl)
 }
 
 /// Parses a comment
 fn comment<'a, E: ParseError<&'a str>>(s: &'a str)  -> IResult<&str, &str, E> {
-    delimited(preceded(multispace0, tag("#")), take_while(|c: char| c != '\n'), tag("\n"))(s)
+    delimited(preceded(ws_nonl, tag("#")), take_while(|c: char| c != '\n'), tag("\n"))(s)
 }
 
 /// Parses the end of declaration delimiter
 fn eol<'a, E: ParseError<&'a str>>(s: &'a str) -> IResult<&str, &str, E> {
-    alt((comment, preceded(multispace0, tag("\n"))))(s)
+    alt((comment, preceded(ws_nonl, tag("\n"))))(s)
 }
 
 /// Parses the declaration of a key
@@ -168,7 +173,7 @@ fn key_value<'a, F: 'a, O, E: ParseError<&'a str> + 'a>(
 where
     F: Fn(&'a str) -> IResult<&'a str, O, E>,
 {
-    delimited(key(key_name), inner, alt((comment, preceded(multispace0, tag("\n")))))
+    delimited(key(key_name), inner, alt((comment, preceded(ws_nonl, tag("\n")))))
 }
 
 /// Parses an escaped string, captures the inside of the quote
@@ -282,21 +287,23 @@ fn imap_store_block<'a, E: ParseError<&'a str> + 'a>(i: &'a str) -> IResult<&'a 
     )(i)
 }
 
+fn imap_account_lines_block<'a, E: ParseError<&'a str> + 'a>(i: StrLike<'a>) -> IResult<StrLike<'a>, Vec<AccountExpr>, E> {
+    many0(alt((
+        host_name,
+        user_name,
+        pass_cmd,
+        ssl_type,
+        certificate_file
+    )))(i)
+}
+
 /// Parses an IMAPAccount block
 pub fn imap_account_block<'a, E: ParseError<&'a str> + 'a>(i: StrLike<'a>) -> IResult<StrLike<'a>, Account, E> {
-    let imap_account_lines = many0(
-        alt((
-            host_name,
-            user_name,
-            pass_cmd,
-            ssl_type,
-            certificate_file
-        )));
-    let block_parser = tuple((account_name, imap_account_lines));
+    let block_parser = tuple((account_name, imap_account_lines_block, tag("\n")));
 
     map(block_parser, |x| {
         match x {
-            (AccountExpr::NameDeclaration(acc_name), params) => {
+            (AccountExpr::NameDeclaration(acc_name), params, _) => {
                 let mut host_v = String::new();
                 let mut user_v = String::new();
                 let mut pass_cmd_v = String::new();
@@ -586,6 +593,23 @@ mod test {
         );
 
         let res = imap_account_lines(input);
+        match res {
+            Ok((a, _)) => assert_eq!(a, ""),
+            Err(e) => panic!("{}", e)
+        }
+    }
+
+    #[test]
+    fn block_test_named() {
+        let input = concat!(
+            "Host imap.mail.com   # A comment\n",
+            "User example@mail.com   # A comment\n",
+            "PassCmd \"get_pass 'example@mail.com'\"   # A comment\n",
+            "SSLType IMAPS #\n",
+            "CertificateFile /etc/ssl/certs/ca-certificates.crt # comt\n",
+        );
+
+        let res = imap_account_lines_block::<VerboseError<&str>>(input);
         match res {
             Ok((a, _)) => assert_eq!(a, ""),
             Err(e) => panic!("{}", e)
